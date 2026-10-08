@@ -1,8 +1,9 @@
+import { del, get } from "@vercel/blob";
 import { z } from "zod";
 import { normalizeAnalysis } from "@/lib/analysis";
 import { processFiles } from "@/lib/documents";
 import { AppError, errorResponse } from "@/lib/errors";
-import { assertApiKey, corpusToInput, generateJson, MODELS, resolveGeminiFile } from "@/lib/gemini";
+import { assertApiKey, corpusToInput, generateJson, MODELS, uploadBufferToGemini } from "@/lib/gemini";
 import { formatBytes, LIMITS, mimeForFile } from "@/lib/labels";
 import { ANALYSIS_SYSTEM, buildAnalysisPrompt } from "@/lib/prompts";
 import { analysisJsonSchema } from "@/lib/schemas";
@@ -10,12 +11,19 @@ import type { CorpusPart } from "@/lib/types";
 
 export const maxDuration = 300;
 
-const remoteFileSchema = z.object({
+const blobFileSchema = z.object({
+  url: z.string().url(),
   name: z.string().min(1),
   mimeType: z.string().min(1),
-  size: z.number().positive(),
-  geminiName: z.string().regex(/^files\/[A-Za-z0-9_-]+$/),
+  size: z.number().positive().max(LIMITS.maxFileBytes),
 });
+
+function assertBlobUrl(url: string) {
+  const host = new URL(url).hostname;
+  if (!host.endsWith(".blob.vercel-storage.com")) {
+    throw new AppError("bad_request", "La subida del archivo no es válida. Vuelve a intentarlo.");
+  }
+}
 
 function fallbackTitle(names: string[]): string {
   const first = names[0]?.replace(/\.[^.]+$/, "") ?? "Mi material";
@@ -57,23 +65,37 @@ export async function POST(request: Request) {
 
     if (contentType.includes("application/json")) {
       const body = await request.json().catch(() => null);
-      const parsed = z.object({ remotes: z.array(remoteFileSchema).min(1).max(LIMITS.maxFiles) }).safeParse(body);
+      const parsed = z.object({ blobs: z.array(blobFileSchema).min(1).max(LIMITS.maxFiles) }).safeParse(body);
       if (!parsed.success) throw new AppError("bad_request", "La solicitud para analizar no es válida.");
       const parts: CorpusPart[] = [];
-      for (const file of parsed.data.remotes) {
-        const ready = await resolveGeminiFile(file.geminiName);
-        parts.push({
-          kind: "media",
-          label: `"${file.name}"`,
-          mediaType: (ready.mimeType || file.mimeType).startsWith("image/") ? "image" : "document",
-          mimeType: mimeForFile(file.name, ready.mimeType || file.mimeType),
-          size: file.size,
-          data: "",
-          fileUri: ready.fileUri,
-          fileExpiresAt: ready.fileExpiresAt,
-        });
+      for (const file of parsed.data.blobs) {
+        assertBlobUrl(file.url);
+        try {
+          const downloaded = await get(file.url, { access: "private" });
+          if (!downloaded || downloaded.statusCode !== 200) {
+            throw new AppError("bad_request", `No encontré "${file.name}". Vuelve a subirlo.`);
+          }
+          const data = Buffer.from(await new Response(downloaded.stream).arrayBuffer());
+          const ready = await uploadBufferToGemini({
+            filename: file.name,
+            mimeType: mimeForFile(file.name, file.mimeType),
+            data,
+          });
+          parts.push({
+            kind: "media",
+            label: `"${file.name}"`,
+            mediaType: ready.mimeType.startsWith("image/") ? "image" : "document",
+            mimeType: ready.mimeType,
+            size: file.size,
+            data: "",
+            fileUri: ready.fileUri,
+            fileExpiresAt: ready.fileExpiresAt,
+          });
+        } finally {
+          await del(file.url).catch(() => undefined);
+        }
       }
-      return Response.json(await analyzeParts(parts, [], parsed.data.remotes.map((file) => file.name)));
+      return Response.json(await analyzeParts(parts, [], parsed.data.blobs.map((file) => file.name)));
     }
 
     const form = await request.formData().catch(() => {

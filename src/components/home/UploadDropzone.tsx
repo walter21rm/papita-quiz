@@ -131,7 +131,7 @@ export function UploadDropzone() {
           {status === "hashing"
             ? "Preparando tus archivos…"
             : files.reduce((sum, file) => sum + file.size, 0) > LIMITS.gatewayBytes && elapsed < 12
-              ? "Subiendo el archivo por partes para que no se corte…"
+              ? "Subiendo tu archivo…"
               : ANALYSIS_MESSAGES[messageIndex]}
         </p>
         {status === "analyzing" && (

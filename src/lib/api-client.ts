@@ -1,3 +1,4 @@
+import { upload } from "@vercel/blob/client";
 import type { ApiErrorBody } from "./errors";
 import { LIMITS, mimeForFile } from "./labels";
 import type { PriorQuestion } from "./schemas";
@@ -54,39 +55,19 @@ export interface AnalyzeResponse {
   notes: string[];
 }
 
-async function uploadFileDirect(file: File) {
-  const mimeType = mimeForFile(file.name, file.type);
-  const started = await call<{ uploadUrl: string; mimeType: string }>("/api/files/begin", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ filename: file.name, mimeType, size: file.size }),
-  });
-  let finished: { file?: { name?: string } } | null = null;
-  for (let offset = 0; offset < file.size; offset += LIMITS.geminiChunkBytes) {
-    const end = Math.min(offset + LIMITS.geminiChunkBytes, file.size);
-    const last = end >= file.size;
-    let response: Response;
-    try {
-      response = await fetch(started.uploadUrl, {
-        method: "POST",
-        headers: {
-          "Content-Type": mimeType,
-          "X-Goog-Upload-Command": last ? "upload, finalize" : "upload",
-          "X-Goog-Upload-Offset": String(offset),
-        },
-        body: file.slice(offset, end),
-      });
-    } catch {
-      throw new ClientApiError("No pude enviar el archivo a Gemini. Revisa tu conexión e inténtalo otra vez.", "network");
-    }
-    if (!response.ok) {
-      throw new ClientApiError("Gemini no aceptó el archivo. Vuelve a intentarlo en un momento.", "ai_unavailable");
-    }
-    if (last) finished = (await response.json().catch(() => null)) as { file?: { name?: string } } | null;
+async function uploadLargeFile(file: File) {
+  try {
+    const blob = await upload(file.name, file, {
+      access: "private",
+      handleUploadUrl: "/api/files/blob",
+      contentType: mimeForFile(file.name, file.type),
+      multipart: file.size > LIMITS.geminiChunkBytes,
+    });
+    return { url: blob.url, name: file.name, size: file.size, mimeType: blob.contentType || mimeForFile(file.name, file.type) };
+  } catch (error) {
+    if (error instanceof ClientApiError) throw error;
+    throw new ClientApiError("No pude subir el archivo. Vuelve a intentarlo en un momento.", "ai_unavailable");
   }
-  const geminiName = finished?.file?.name;
-  if (!geminiName) throw new ClientApiError("La subida del archivo no terminó. Vuelve a intentarlo.", "ai_unavailable");
-  return { name: file.name, mimeType: started.mimeType, size: file.size, geminiName };
 }
 
 export async function analyzeFiles(files: File[]): Promise<AnalyzeResponse> {
@@ -96,12 +77,12 @@ export async function analyzeFiles(files: File[]): Promise<AnalyzeResponse> {
     for (const file of files) form.append("files", file, file.name);
     return call<AnalyzeResponse>("/api/analyze", { method: "POST", body: form });
   }
-  const remotes = [];
-  for (const file of files) remotes.push(await uploadFileDirect(file));
+  const blobs = [];
+  for (const file of files) blobs.push(await uploadLargeFile(file));
   return call<AnalyzeResponse>("/api/analyze", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ remotes }),
+    body: JSON.stringify({ blobs }),
   });
 }
 

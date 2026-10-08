@@ -279,45 +279,22 @@ async function uploadMedia(part: MediaPart): Promise<{ uri: string; expiresAt: n
   return { uri: ready.uri, expiresAt: ready.expiresAt };
 }
 
-/** Opens a Gemini resumable session so the browser can send a large file in parts under Vercel's body limit. */
-export async function beginResumableUpload(options: {
+/** Sends a file that already arrived on the server (for example from Blob) to Gemini. */
+export async function uploadBufferToGemini(options: {
   filename: string;
   mimeType: string;
-  size: number;
-}): Promise<string> {
-  const apiKey = assertApiKey();
-  const response = await fetch(`https://generativelanguage.googleapis.com/upload/v1beta/files?key=${apiKey}`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "X-Goog-Upload-Protocol": "resumable",
-      "X-Goog-Upload-Command": "start",
-      "X-Goog-Upload-Header-Content-Length": String(options.size),
-      "X-Goog-Upload-Header-Content-Type": options.mimeType,
-      "X-Goog-Upload-File-Name": options.filename.slice(0, 500),
-    },
-    body: JSON.stringify({ file: { display_name: options.filename.slice(0, 500) } }),
+  data: Buffer;
+}): Promise<UploadedGeminiFile> {
+  const ai = getClient();
+  const uploaded = await ai.files.upload({
+    file: new Blob([new Uint8Array(options.data)], { type: options.mimeType }),
+    config: { mimeType: options.mimeType, displayName: options.filename.slice(0, 500) },
   });
-  const uploadUrl = response.headers.get("x-goog-upload-url");
-  if (!response.ok || !uploadUrl) {
-    const detail = await response.text().catch(() => "");
-    throw toAppError(new Error(detail || `No pude iniciar la subida (${response.status}).`));
+  if (!uploaded.name) {
+    throw new AppError("ai_unavailable", "Gemini no pudo recibir el archivo. Vuelve a intentarlo.");
   }
-  const publicUrl = new URL(uploadUrl);
-  publicUrl.searchParams.delete("key");
-  const safe = publicUrl.toString();
-  if (safe.includes(apiKey)) {
-    throw new AppError("internal", "No pude preparar una subida segura para ese archivo.");
-  }
-  return safe;
-}
-
-export async function resolveGeminiFile(name: string): Promise<UploadedGeminiFile> {
-  if (!/^files\/[A-Za-z0-9_-]+$/.test(name)) {
-    throw new AppError("bad_request", "La subida del archivo no es válida. Vuelve a intentarlo.");
-  }
-  const ready = await waitUntilActive(name);
-  return { fileUri: ready.uri, fileExpiresAt: ready.expiresAt, mimeType: ready.mimeType, size: ready.size };
+  const ready = await waitUntilActive(uploaded.name);
+  return { fileUri: ready.uri, fileExpiresAt: ready.expiresAt, mimeType: ready.mimeType, size: ready.size || options.data.length };
 }
 
 /**
