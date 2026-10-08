@@ -19,8 +19,9 @@ export async function normalizeImage(buffer: Buffer, mime: string): Promise<Norm
 
   if (NATIVE_MIME.has(mime)) {
     const metadata = await sharp(buffer).metadata().catch(() => null);
-    const rotated = metadata?.orientation !== undefined && metadata.orientation !== 1;
-    if (!metadata || (!rotated && buffer.length <= MAX_NATIVE_BYTES)) {
+    if (!metadata?.width || !metadata.height) throw new Error("unreadable image");
+    const rotated = metadata.orientation !== undefined && metadata.orientation !== 1;
+    if (!rotated && buffer.length <= MAX_NATIVE_BYTES) {
       return [{ mimeType: mime, data: buffer }];
     }
     const pipeline = sharp(buffer)

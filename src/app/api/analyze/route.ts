@@ -36,6 +36,17 @@ function clientCorpus(parts: CorpusPart[]): CorpusPart[] {
 
 async function analyzeParts(parts: CorpusPart[], notes: string[], names: string[]) {
   if (parts.length === 0) throw new AppError("unreadable_files", "No pude leer ninguno de tus archivos.", notes);
+  try {
+    return await analyzeCorpus(parts, notes, names);
+  } catch (error) {
+    const textOnly = parts.filter((part) => part.kind === "text");
+    const imageFailed = error instanceof AppError && /input image/i.test(error.message);
+    if (!imageFailed || textOnly.length === 0 || textOnly.length === parts.length) throw error;
+    return analyzeCorpus(textOnly, [...notes, "Algunas imágenes no se pudieron leer; usé el texto del archivo."], names);
+  }
+}
+
+async function analyzeCorpus(parts: CorpusPart[], notes: string[], names: string[]) {
   const { input, updates } = await corpusToInput(parts);
   for (const update of updates) {
     const part = parts[update.index];

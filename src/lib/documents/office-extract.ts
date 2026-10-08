@@ -111,13 +111,18 @@ function slideTextFromRecords(buffer: Buffer): string {
 function embeddedImages(buffer: Buffer): ExtractedImage[] {
   const images: ExtractedImage[] = [];
   const push = (data: Buffer, mimeType: string) => {
-    if (data.length < 8_000 || data.length > 4_000_000 || images.length >= 24) return;
+    if (data.length < 8_000 || data.length > 4_000_000 || images.length >= 12) return;
     images.push({ name: `imagen-${images.length + 1}`, mimeType, data });
   };
   let cursor = 0;
   while (cursor < buffer.length && images.length < 24) {
     const jpeg = buffer.indexOf(Buffer.from([0xff, 0xd8, 0xff]), cursor);
     if (jpeg < 0) break;
+    const marker = buffer[jpeg + 3];
+    if (marker !== 0xe0 && marker !== 0xe1 && marker !== 0xdb && marker !== 0xee && marker !== 0xe2) {
+      cursor = jpeg + 3;
+      continue;
+    }
     const end = buffer.indexOf(Buffer.from([0xff, 0xd9]), jpeg + 4);
     if (end > jpeg) push(buffer.subarray(jpeg, end + 2), "image/jpeg");
     cursor = jpeg + 3;
@@ -140,10 +145,31 @@ function streamBuffer(content: Uint8Array | number[] | undefined): Buffer | null
   return Buffer.from(content);
 }
 
+async function realImages(candidates: ExtractedImage[]): Promise<ExtractedImage[]> {
+  const { default: sharp } = await import("sharp");
+  const kept: ExtractedImage[] = [];
+  for (const image of candidates) {
+    try {
+      const data = await sharp(image.data, { failOn: "error" })
+        .rotate()
+        .resize({ width: 1600, height: 1600, fit: "inside", withoutEnlargement: true })
+        .jpeg({ quality: 82 })
+        .toBuffer();
+      const meta = await sharp(data).metadata();
+      if (!meta.width || !meta.height || meta.width < 80 || meta.height < 80) continue;
+      kept.push({ name: `imagen-${kept.length + 1}`, mimeType: "image/jpeg", data });
+    } catch {
+      // Byte sequences that merely look like a photo are ignored.
+    }
+    if (kept.length >= 8) break;
+  }
+  return kept;
+}
+
 /** Reads a PowerPoint 97–2003 file (.ppt) without Microsoft Office. */
 export async function extractLegacyPowerPoint(buffer: Buffer): Promise<ExtractedContent> {
   let document = buffer;
-  const imageSources = [buffer];
+  const imageSources: Buffer[] = [];
   try {
     const { find, parse } = await import("cfb");
     const container = parse(buffer, { type: "buffer" });
@@ -152,22 +178,22 @@ export async function extractLegacyPowerPoint(buffer: Buffer): Promise<Extracted
       const content = streamBuffer(entry?.content);
       if (!content) continue;
       if (name.includes("PowerPoint Document")) document = content;
-      imageSources.push(content);
+      else imageSources.push(content);
     }
   } catch {
-    // Not a compound file; the record scan below still tries the raw bytes.
+    imageSources.push(buffer);
   }
-  const images: ExtractedImage[] = [];
+  if (imageSources.length === 0) imageSources.push(document);
+  const candidates: ExtractedImage[] = [];
   const seenSizes = new Set<number>();
   for (const source of imageSources) {
     for (const image of embeddedImages(source)) {
       if (seenSizes.has(image.data.length)) continue;
       seenSizes.add(image.data.length);
-      images.push(image);
-      if (images.length >= 24) break;
+      candidates.push(image);
     }
   }
-  return { text: slideTextFromRecords(document), images };
+  return { text: slideTextFromRecords(document), images: await realImages(candidates) };
 }
 
 export async function extractLegacyWord(buffer: Buffer): Promise<string> {
