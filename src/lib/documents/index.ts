@@ -1,5 +1,6 @@
 import type { SupportedFileType } from "officeparser";
 import type { CorpusPart, MediaPart, TextPart } from "@/lib/types";
+import { mimeForFile } from "@/lib/labels";
 import { detectFile, sniffMime, type DocumentKind } from "./detect";
 import { normalizeImage, type NormalizedImage } from "./images";
 import { convertWithOffice } from "./office-convert";
@@ -131,10 +132,11 @@ async function processOfficeDocument(file: IncomingFile, extension: string, kind
     return { parts: [textPart(`Contenido de "${file.name}"`, text, notes, file.name)], notes };
   }
 
-  const suggestion = kind === "word" ? ".docx" : ".pptx";
   return {
-    parts: [],
-    notes: [`No pude abrir "${file.name}". Guárdalo como ${suggestion} o PDF y vuelve a subirlo.`],
+    parts: [mediaPart(`"${file.name}"`, "document", mimeForFile(file.name, file.type), file.buffer)],
+    notes: [
+      `No pude convertirlo con Office; lo envío a la IA en su formato original (${file.name}).`,
+    ],
   };
 }
 

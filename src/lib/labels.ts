@@ -53,9 +53,68 @@ export const LIMITS = {
   maxFiles: 20,
   maxFileBytes: 50 * 1024 * 1024,
   maxTotalBytes: 150 * 1024 * 1024,
+  // Vercel Hobby rejects bodies over ~4.5 MB (HTTP 413); stay under that per request.
+  gatewayBytes: 3.5 * 1024 * 1024,
+  uploadChunkBytes: 2 * 1024 * 1024,
   minQuestions: 5,
   maxQuestions: 30,
 } as const;
+
+const MIME_BY_EXTENSION: Record<string, string> = {
+  pdf: "application/pdf",
+  doc: "application/msword",
+  dot: "application/msword",
+  docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  docm: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  dotx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  rtf: "application/rtf",
+  odt: "application/vnd.oasis.opendocument.text",
+  ott: "application/vnd.oasis.opendocument.text",
+  ppt: "application/vnd.ms-powerpoint",
+  pps: "application/vnd.ms-powerpoint",
+  pot: "application/vnd.ms-powerpoint",
+  pptx: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+  pptm: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+  ppsx: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+  potx: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+  odp: "application/vnd.oasis.opendocument.presentation",
+  otp: "application/vnd.oasis.opendocument.presentation",
+  xls: "application/vnd.ms-excel",
+  xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  xlsm: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  ods: "application/vnd.oasis.opendocument.spreadsheet",
+  ots: "application/vnd.oasis.opendocument.spreadsheet",
+  csv: "text/csv",
+  tsv: "text/tab-separated-values",
+  txt: "text/plain",
+  md: "text/markdown",
+  markdown: "text/markdown",
+  html: "text/html",
+  htm: "text/html",
+  epub: "application/epub+zip",
+  tex: "application/x-tex",
+  json: "application/json",
+  xml: "application/xml",
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  jfif: "image/jpeg",
+  png: "image/png",
+  webp: "image/webp",
+  gif: "image/gif",
+  bmp: "image/bmp",
+  tif: "image/tiff",
+  tiff: "image/tiff",
+  heic: "image/heic",
+  heif: "image/heif",
+  avif: "image/avif",
+  svg: "image/svg+xml",
+  ico: "image/x-icon",
+};
+
+export function mimeForFile(fileName: string, browserType = ""): string {
+  if (browserType && browserType !== "application/octet-stream") return browserType;
+  return MIME_BY_EXTENSION[extensionOf(fileName)] ?? "application/octet-stream";
+}
 
 export const FORMAT_GROUPS: { label: string; extensions: string[] }[] = [
   { label: "PDF", extensions: ["pdf"] },

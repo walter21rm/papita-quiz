@@ -197,7 +197,7 @@ export const corpusPartSchema = z.discriminatedUnion("kind", [
     mediaType: z.enum(["document", "image"]),
     mimeType: z.string(),
     size: z.number(),
-    data: z.string(),
+    data: z.string().optional().default(""),
     fileUri: z.string().optional(),
     fileExpiresAt: z.number().optional(),
   }),

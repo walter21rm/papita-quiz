@@ -229,23 +229,118 @@ export async function generateJson(options: GenerateOptions): Promise<unknown> {
   throw new AppError("ai_unavailable", "Gemini está muy ocupado en este momento. Vuelve a intentarlo en un minuto.");
 }
 
-async function uploadMedia(part: MediaPart): Promise<{ uri: string; expiresAt: number }> {
+export interface UploadedGeminiFile {
+  fileUri: string;
+  fileExpiresAt: number;
+  mimeType: string;
+  size: number;
+}
+
+function fileExpiresAt(expirationTime?: string): number {
+  return expirationTime ? Date.parse(expirationTime) : Date.now() + FILE_DEFAULT_LIFETIME_MS;
+}
+
+async function waitUntilActive(name: string): Promise<{ uri: string; mimeType: string; size: number; expiresAt: number }> {
   const ai = getClient();
-  const blob = new Blob([Buffer.from(part.data, "base64")], { type: part.mimeType });
-  let file = await ai.files.upload({
-    file: blob,
-    config: { mimeType: part.mimeType, displayName: part.label.slice(0, 500) },
-  });
+  let file = await ai.files.get({ name });
   const deadline = Date.now() + 120_000;
   while (file.state === "PROCESSING" && file.name && Date.now() < deadline) {
     await new Promise((resolve) => setTimeout(resolve, 2000));
     file = await ai.files.get({ name: file.name });
   }
   if (!file.uri || file.state === "FAILED") {
+    throw new AppError("ai_unavailable", "Gemini no pudo recibir el archivo. Vuelve a intentarlo.");
+  }
+  return {
+    uri: file.uri,
+    mimeType: file.mimeType ?? "application/octet-stream",
+    size: Number(file.sizeBytes ?? 0),
+    expiresAt: fileExpiresAt(file.expirationTime),
+  };
+}
+
+async function uploadMedia(part: MediaPart): Promise<{ uri: string; expiresAt: number }> {
+  if (!part.data) {
+    throw new AppError(
+      "bad_request",
+      `El archivo ${part.label} ya no está disponible. Vuelve a subirlo para crear un quiz nuevo.`,
+    );
+  }
+  const ai = getClient();
+  const blob = new Blob([Buffer.from(part.data, "base64")], { type: part.mimeType });
+  const uploaded = await ai.files.upload({
+    file: blob,
+    config: { mimeType: part.mimeType, displayName: part.label.slice(0, 500) },
+  });
+  if (!uploaded.name) {
     throw new AppError("ai_unavailable", `Gemini no pudo recibir el archivo ${part.label}. Vuelve a intentarlo.`);
   }
-  const expiresAt = file.expirationTime ? Date.parse(file.expirationTime) : Date.now() + FILE_DEFAULT_LIFETIME_MS;
-  return { uri: file.uri, expiresAt };
+  const ready = await waitUntilActive(uploaded.name);
+  return { uri: ready.uri, expiresAt: ready.expiresAt };
+}
+
+/** Opens a Gemini resumable session so the browser can send a large file in parts under Vercel's body limit. */
+export async function beginResumableUpload(options: {
+  filename: string;
+  mimeType: string;
+  size: number;
+}): Promise<string> {
+  const apiKey = assertApiKey();
+  const response = await fetch(`https://generativelanguage.googleapis.com/upload/v1beta/files?key=${apiKey}`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-Goog-Upload-Protocol": "resumable",
+      "X-Goog-Upload-Command": "start",
+      "X-Goog-Upload-Header-Content-Length": String(options.size),
+      "X-Goog-Upload-Header-Content-Type": options.mimeType,
+      "X-Goog-Upload-File-Name": options.filename.slice(0, 500),
+    },
+    body: JSON.stringify({ file: { display_name: options.filename.slice(0, 500) } }),
+  });
+  const uploadUrl = response.headers.get("x-goog-upload-url");
+  if (!response.ok || !uploadUrl) {
+    const detail = await response.text().catch(() => "");
+    throw toAppError(new Error(detail || `No pude iniciar la subida (${response.status}).`));
+  }
+  return uploadUrl;
+}
+
+export async function pushResumableChunk(options: {
+  uploadUrl: string;
+  chunk: Buffer;
+  offset: number;
+  last: boolean;
+}): Promise<UploadedGeminiFile | null> {
+  const response = await fetch(options.uploadUrl, {
+    method: "POST",
+    headers: {
+      "X-Goog-Upload-Command": options.last ? "upload, finalize" : "upload",
+      "X-Goog-Upload-Offset": String(options.offset),
+      "Content-Type": "application/octet-stream",
+    },
+    body: new Uint8Array(options.chunk),
+  });
+  if (!response.ok) {
+    const detail = await response.text().catch(() => "");
+    throw toAppError(new Error(detail || `Falló un tramo de la subida (${response.status}).`));
+  }
+  if (!options.last) return null;
+  const body = (await response.json().catch(() => null)) as { file?: { name?: string; uri?: string; mimeType?: string; sizeBytes?: string; expirationTime?: string } } | null;
+  const name = body?.file?.name;
+  if (name) {
+    const ready = await waitUntilActive(name);
+    return { fileUri: ready.uri, fileExpiresAt: ready.expiresAt, mimeType: ready.mimeType, size: ready.size };
+  }
+  if (body?.file?.uri) {
+    return {
+      fileUri: body.file.uri,
+      fileExpiresAt: fileExpiresAt(body.file.expirationTime),
+      mimeType: body.file.mimeType ?? "application/octet-stream",
+      size: Number(body.file.sizeBytes ?? options.offset + options.chunk.length),
+    };
+  }
+  throw new AppError("ai_unavailable", "Gemini no confirmó la subida del archivo. Vuelve a intentarlo.");
 }
 
 /**
@@ -270,7 +365,7 @@ export async function corpusToInput(parts: CorpusPart[]): Promise<{ input: Input
           ? part.fileUri
           : undefined;
       let uri = validUri;
-      if (!uri && (part.size > INLINE_PART_LIMIT || inlineBytes + part.size > INLINE_TOTAL_LIMIT)) {
+      if (!uri && (part.size > INLINE_PART_LIMIT || inlineBytes + part.size > INLINE_TOTAL_LIMIT || !part.data)) {
         const uploaded = await uploadMedia(part);
         uri = uploaded.uri;
         updates.push({ index, fileUri: uploaded.uri, fileExpiresAt: uploaded.expiresAt });

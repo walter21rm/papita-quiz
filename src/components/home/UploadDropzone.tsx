@@ -128,7 +128,11 @@ export function UploadDropzone() {
       <div className="flex flex-col items-center gap-4 rounded-[2rem] border-2 border-papa-200 bg-white/80 p-8 text-center shadow-lg shadow-papa-200/40">
         <PapitaMascot mood="thinking" size={130} className="animate-float" />
         <p className="font-display text-xl font-semibold text-papa-900" aria-live="polite">
-          {status === "hashing" ? "Preparando tus archivos…" : ANALYSIS_MESSAGES[messageIndex]}
+          {status === "hashing"
+            ? "Preparando tus archivos…"
+            : files.reduce((sum, file) => sum + file.size, 0) > LIMITS.gatewayBytes && elapsed < 12
+              ? "Subiendo el archivo por partes para que no se corte…"
+              : ANALYSIS_MESSAGES[messageIndex]}
         </p>
         {status === "analyzing" && (
           <p className="text-sm text-papa-800/80">

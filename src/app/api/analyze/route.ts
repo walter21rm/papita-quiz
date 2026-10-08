@@ -1,21 +1,78 @@
+import { z } from "zod";
 import { normalizeAnalysis } from "@/lib/analysis";
 import { processFiles } from "@/lib/documents";
 import { AppError, errorResponse } from "@/lib/errors";
 import { assertApiKey, corpusToInput, generateJson, MODELS } from "@/lib/gemini";
-import { formatBytes, LIMITS } from "@/lib/labels";
+import { formatBytes, LIMITS, mimeForFile } from "@/lib/labels";
 import { ANALYSIS_SYSTEM, buildAnalysisPrompt } from "@/lib/prompts";
 import { analysisJsonSchema } from "@/lib/schemas";
+import type { CorpusPart } from "@/lib/types";
 
 export const maxDuration = 300;
 
-function fallbackTitle(files: File[]): string {
-  const first = files[0]?.name.replace(/\.[^.]+$/, "") ?? "Mi material";
-  return files.length > 1 ? `${first} y ${files.length - 1} más` : first;
+const remoteFileSchema = z.object({
+  name: z.string().min(1),
+  mimeType: z.string().min(1),
+  size: z.number().positive(),
+  fileUri: z.string().min(1),
+  fileExpiresAt: z.number().int(),
+});
+
+function fallbackTitle(names: string[]): string {
+  const first = names[0]?.replace(/\.[^.]+$/, "") ?? "Mi material";
+  return names.length > 1 ? `${first} y ${names.length - 1} más` : first;
+}
+
+function clientCorpus(parts: CorpusPart[]): CorpusPart[] {
+  return parts.map((part) => (part.kind === "media" && part.fileUri ? { ...part, data: "" } : part));
+}
+
+async function analyzeParts(parts: CorpusPart[], notes: string[], names: string[]) {
+  if (parts.length === 0) throw new AppError("unreadable_files", "No pude leer ninguno de tus archivos.", notes);
+  const { input, updates } = await corpusToInput(parts);
+  for (const update of updates) {
+    const part = parts[update.index];
+    if (part.kind === "media") {
+      part.fileUri = update.fileUri;
+      part.fileExpiresAt = update.fileExpiresAt;
+    }
+  }
+  const raw = await generateJson({
+    models: MODELS.main,
+    system: ANALYSIS_SYSTEM,
+    input: [...input, { type: "text", text: buildAnalysisPrompt(parts.length) }],
+    schema: analysisJsonSchema,
+    thinking: "high",
+  });
+  return {
+    analysis: normalizeAnalysis(raw, fallbackTitle(names)),
+    corpus: clientCorpus(parts),
+    notes,
+  };
 }
 
 export async function POST(request: Request) {
   try {
     assertApiKey();
+    const contentType = request.headers.get("content-type") ?? "";
+
+    if (contentType.includes("application/json")) {
+      const body = await request.json().catch(() => null);
+      const parsed = z.object({ remotes: z.array(remoteFileSchema).min(1).max(LIMITS.maxFiles) }).safeParse(body);
+      if (!parsed.success) throw new AppError("bad_request", "La solicitud para analizar no es válida.");
+      const parts: CorpusPart[] = parsed.data.remotes.map((file) => ({
+        kind: "media",
+        label: `"${file.name}"`,
+        mediaType: file.mimeType.startsWith("image/") ? "image" : "document",
+        mimeType: mimeForFile(file.name, file.mimeType),
+        size: file.size,
+        data: "",
+        fileUri: file.fileUri,
+        fileExpiresAt: file.fileExpiresAt,
+      }));
+      return Response.json(await analyzeParts(parts, [], parsed.data.remotes.map((file) => file.name)));
+    }
+
     const form = await request.formData().catch(() => {
       throw new AppError("bad_request", "No recibí ningún archivo.");
     });
@@ -41,27 +98,7 @@ export async function POST(request: Request) {
       files.map(async (file) => ({ name: file.name, type: file.type, buffer: Buffer.from(await file.arrayBuffer()) })),
     );
     const { parts, notes } = await processFiles(incoming);
-    if (parts.length === 0) throw new AppError("unreadable_files", "No pude leer ninguno de tus archivos.", notes);
-
-    const { input, updates } = await corpusToInput(parts);
-    for (const update of updates) {
-      const part = parts[update.index];
-      if (part.kind === "media") {
-        part.fileUri = update.fileUri;
-        part.fileExpiresAt = update.fileExpiresAt;
-      }
-    }
-
-    const raw = await generateJson({
-      models: MODELS.main,
-      system: ANALYSIS_SYSTEM,
-      input: [...input, { type: "text", text: buildAnalysisPrompt(parts.length) }],
-      schema: analysisJsonSchema,
-      thinking: "high",
-    });
-    const analysis = normalizeAnalysis(raw, fallbackTitle(files));
-
-    return Response.json({ analysis, corpus: parts, notes });
+    return Response.json(await analyzeParts(parts, notes, files.map((file) => file.name)));
   } catch (error) {
     return errorResponse(error);
   }
