@@ -78,14 +78,25 @@
   color-scheme: light;
 }
 
+html {
+  text-size-adjust: 100%;
+  -webkit-text-size-adjust: 100%;
+}
+
 body {
   background-color: var(--color-crema);
   background-image:
     radial-gradient(circle at 12% 8%, rgb(251 217 147 / 0.45), transparent 32%),
     radial-gradient(circle at 88% 0%, rgb(216 240 208 / 0.55), transparent 28%),
     radial-gradient(circle at 50% 100%, rgb(254 237 203 / 0.6), transparent 40%);
-  background-attachment: fixed;
   color: var(--color-cafe);
+  padding-top: env(safe-area-inset-top);
+}
+
+@media (min-width: 64rem) {
+  body {
+    background-attachment: fixed;
+  }
 }
 
 .papita-blink {

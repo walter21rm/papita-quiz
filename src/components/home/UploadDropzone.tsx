@@ -142,7 +142,7 @@ export function UploadDropzone() {
   }
 
   return (
-    <div className="flex flex-col gap-4">
+    <div className="flex w-full flex-col gap-4">
       <div
         {...getRootProps()}
         className={`relative cursor-pointer rounded-[2rem] border-2 border-dashed p-6 text-center transition sm:p-8 ${
@@ -158,9 +158,17 @@ export function UploadDropzone() {
               <CloudUpload className="size-8" aria-hidden />
             </span>
             <p className="font-display text-xl font-semibold text-papa-900">
-              {isDragActive ? "¡Suéltalos aquí!" : "Arrastra tus archivos aquí"}
+              {isDragActive ? "¡Suéltalos aquí!" : (
+                <>
+                  <span className="sm:hidden">Toca para elegir tus archivos</span>
+                  <span className="hidden sm:inline">Arrastra tus archivos aquí</span>
+                </>
+              )}
             </p>
-            <p className="text-sm text-papa-800/80">o haz clic para elegirlos. Puedes subir varios a la vez.</p>
+            <p className="text-sm text-papa-800/80">
+              <span className="sm:hidden">PDF, Word, PowerPoint, Excel, fotos o texto. Puedes elegir varios.</span>
+              <span className="hidden sm:inline">o haz clic para elegirlos. Puedes subir varios a la vez.</span>
+            </p>
           </div>
         ) : (
           <div className="flex flex-col gap-3 text-left">
@@ -254,7 +262,7 @@ export function UploadDropzone() {
         type="button"
         onClick={handleAnalyze}
         disabled={files.length === 0 || tooHeavy}
-        className="mx-auto inline-flex items-center gap-2 rounded-full bg-papa-500 px-8 py-3 font-display text-lg font-semibold text-white shadow-lg shadow-papa-500/30 transition hover:-translate-y-0.5 hover:bg-papa-600 disabled:translate-y-0 disabled:cursor-not-allowed disabled:bg-papa-200 disabled:shadow-none"
+        className="flex w-full items-center justify-center gap-2 rounded-full bg-papa-500 px-8 py-3.5 font-display text-lg font-semibold text-white shadow-lg shadow-papa-500/30 transition hover:-translate-y-0.5 hover:bg-papa-600 disabled:translate-y-0 disabled:cursor-not-allowed disabled:bg-papa-200 disabled:shadow-none sm:mx-auto sm:w-auto"
       >
         <Sparkles className="size-5" aria-hidden />
         Analizar y preparar mi quiz

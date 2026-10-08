@@ -16,7 +16,7 @@ export function ProgressHeader({ quiz, attempt, index, onJump }: ProgressHeaderP
 
   return (
     <div className="flex flex-col gap-2">
-      <div className="flex items-end justify-between gap-3">
+      <div className="flex flex-wrap items-end justify-between gap-x-3 gap-y-1">
         <p className="font-display text-lg font-semibold text-papa-900">
           Pregunta {Math.min(index + 1, total)} <span className="text-papa-800/60">de {total}</span>
         </p>

@@ -202,7 +202,7 @@ export function QuestionStage({ quiz, attempt, question, isLast, onNext }: Quest
                 type="button"
                 onClick={check}
                 disabled={grading || !isAnswered(response)}
-                className="inline-flex items-center gap-2 rounded-full bg-papa-500 px-6 py-3 font-display text-lg font-semibold text-white shadow-md shadow-papa-500/30 transition hover:bg-papa-600 disabled:bg-papa-200 disabled:shadow-none"
+                className="inline-flex w-full items-center justify-center gap-2 rounded-full bg-papa-500 px-6 py-3 font-display text-lg font-semibold text-white shadow-md shadow-papa-500/30 transition hover:bg-papa-600 disabled:bg-papa-200 disabled:shadow-none sm:w-auto"
               >
                 {grading ? <LoaderCircle className="size-5 animate-spin" aria-hidden /> : <Send className="size-5" aria-hidden />}
                 {grading ? "Revisando…" : retrying ? "Comprobar de nuevo" : "Comprobar"}
@@ -221,7 +221,7 @@ export function QuestionStage({ quiz, attempt, question, isLast, onNext }: Quest
               type="button"
               onClick={onNext}
               autoFocus
-              className="inline-flex items-center gap-2 rounded-full bg-papa-500 px-6 py-3 font-display text-lg font-semibold text-white shadow-md shadow-papa-500/30 transition hover:bg-papa-600"
+              className="inline-flex w-full items-center justify-center gap-2 rounded-full bg-papa-500 px-6 py-3 font-display text-lg font-semibold text-white shadow-md shadow-papa-500/30 transition hover:bg-papa-600 sm:w-auto"
             >
               {isLast ? "Ver mis resultados" : "Siguiente pregunta"} <ArrowRight className="size-5" aria-hidden />
             </button>

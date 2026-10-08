@@ -25,9 +25,14 @@ export default function HomePage() {
   return (
     <div className="flex flex-col gap-12 pt-4">
       <section className="flex flex-col items-center gap-6 text-center">
-        <PapitaMascot mood="wave" size={170} className="animate-float drop-shadow-xl" title="Papita saludando" />
+        <PapitaMascot
+          mood="wave"
+          size={170}
+          className="h-auto w-[min(170px,42vw)] animate-float drop-shadow-xl landscape:w-[min(120px,22vh)]"
+          title="Papita saludando"
+        />
         <div className="flex flex-col gap-3">
-          <h1 className="font-display text-4xl font-bold tracking-tight text-papa-900 sm:text-6xl">
+          <h1 className="font-display text-[clamp(1.85rem,8vw,3.75rem)] font-bold tracking-tight text-papa-900">
             ¡Hola papita, <span className="text-papa-500">te ayudaré!</span>
           </h1>
           <p className="mx-auto max-w-2xl text-lg text-papa-800">
