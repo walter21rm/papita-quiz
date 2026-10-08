@@ -3,8 +3,8 @@ import { z } from "zod";
 import { normalizeAnalysis } from "@/lib/analysis";
 import { processFiles } from "@/lib/documents";
 import { AppError, errorResponse } from "@/lib/errors";
-import { assertApiKey, corpusToInput, generateJson, MODELS, uploadBufferToGemini } from "@/lib/gemini";
-import { formatBytes, LIMITS, mimeForFile } from "@/lib/labels";
+import { assertApiKey, corpusToInput, generateJson, MODELS } from "@/lib/gemini";
+import { formatBytes, LIMITS } from "@/lib/labels";
 import { ANALYSIS_SYSTEM, buildAnalysisPrompt } from "@/lib/prompts";
 import { analysisJsonSchema } from "@/lib/schemas";
 import type { CorpusPart } from "@/lib/types";
@@ -67,7 +67,7 @@ export async function POST(request: Request) {
       const body = await request.json().catch(() => null);
       const parsed = z.object({ blobs: z.array(blobFileSchema).min(1).max(LIMITS.maxFiles) }).safeParse(body);
       if (!parsed.success) throw new AppError("bad_request", "La solicitud para analizar no es válida.");
-      const parts: CorpusPart[] = [];
+      const incoming = [];
       for (const file of parsed.data.blobs) {
         assertBlobUrl(file.url);
         try {
@@ -75,27 +75,19 @@ export async function POST(request: Request) {
           if (!downloaded || downloaded.statusCode !== 200) {
             throw new AppError("bad_request", `No encontré "${file.name}". Vuelve a subirlo.`);
           }
-          const data = Buffer.from(await new Response(downloaded.stream).arrayBuffer());
-          const ready = await uploadBufferToGemini({
-            filename: file.name,
-            mimeType: mimeForFile(file.name, file.mimeType),
-            data,
-          });
-          parts.push({
-            kind: "media",
-            label: `"${file.name}"`,
-            mediaType: ready.mimeType.startsWith("image/") ? "image" : "document",
-            mimeType: ready.mimeType,
-            size: file.size,
-            data: "",
-            fileUri: ready.fileUri,
-            fileExpiresAt: ready.fileExpiresAt,
+          incoming.push({
+            name: file.name,
+            type: file.mimeType,
+            buffer: Buffer.from(await new Response(downloaded.stream).arrayBuffer()),
           });
         } finally {
           await del(file.url).catch(() => undefined);
         }
       }
-      return Response.json(await analyzeParts(parts, [], parsed.data.blobs.map((file) => file.name)));
+      const { parts, notes } = await processFiles(incoming);
+      return Response.json(
+        await analyzeParts(parts, notes, parsed.data.blobs.map((file) => file.name)),
+      );
     }
 
     const form = await request.formData().catch(() => {

@@ -15,6 +15,7 @@
     "@google/genai": "^2.28.0",
     "@vercel/blob": "^2.8.1",
     "canvas-confetti": "^1.9.4",
+    "cfb": "^1.2.2",
     "dexie": "^4.4.6",
     "dexie-react-hooks": "^4.4.0",
     "jimp": "^1.6.1",

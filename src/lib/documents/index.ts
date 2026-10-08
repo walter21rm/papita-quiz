@@ -1,10 +1,9 @@
 import type { SupportedFileType } from "officeparser";
 import type { CorpusPart, MediaPart, TextPart } from "@/lib/types";
-import { mimeForFile } from "@/lib/labels";
 import { detectFile, sniffMime, type DocumentKind } from "./detect";
 import { normalizeImage, type NormalizedImage } from "./images";
 import { convertWithOffice } from "./office-convert";
-import { extractLegacyWord, extractWithOfficeParser, type ExtractedContent } from "./office-extract";
+import { extractLegacyPowerPoint, extractLegacyWord, extractWithOfficeParser, type ExtractedContent } from "./office-extract";
 
 export interface IncomingFile {
   name: string;
@@ -132,11 +131,22 @@ async function processOfficeDocument(file: IncomingFile, extension: string, kind
     return { parts: [textPart(`Contenido de "${file.name}"`, text, notes, file.name)], notes };
   }
 
+  if (extension === "ppt" || extension === "pps" || extension === "pot") {
+    const extracted = await extractLegacyPowerPoint(file.buffer);
+    if (!extracted.text.trim() && extracted.images.length === 0) {
+      return {
+        parts: [],
+        notes: [`No pude leer "${file.name}". Ábrelo en PowerPoint y guárdalo como .pptx o PDF.`],
+      };
+    }
+    const result = await fromExtraction(file.name, extracted);
+    result.notes.unshift(`Leí el texto de "${file.name}". Si alguna diapositiva es solo un dibujo, guárdala como PDF para verla completa.`);
+    return result;
+  }
+
   return {
-    parts: [mediaPart(`"${file.name}"`, "document", mimeForFile(file.name, file.type), file.buffer)],
-    notes: [
-      `No pude convertirlo con Office; lo envío a la IA en su formato original (${file.name}).`,
-    ],
+    parts: [],
+    notes: [`No pude abrir "${file.name}". Guárdalo como PDF y vuelve a subirlo.`],
   };
 }
 

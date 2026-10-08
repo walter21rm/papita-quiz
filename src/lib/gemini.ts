@@ -229,13 +229,6 @@ export async function generateJson(options: GenerateOptions): Promise<unknown> {
   throw new AppError("ai_unavailable", "Gemini está muy ocupado en este momento. Vuelve a intentarlo en un minuto.");
 }
 
-export interface UploadedGeminiFile {
-  fileUri: string;
-  fileExpiresAt: number;
-  mimeType: string;
-  size: number;
-}
-
 function fileExpiresAt(expirationTime?: string): number {
   return expirationTime ? Date.parse(expirationTime) : Date.now() + FILE_DEFAULT_LIFETIME_MS;
 }
@@ -277,24 +270,6 @@ async function uploadMedia(part: MediaPart): Promise<{ uri: string; expiresAt: n
   }
   const ready = await waitUntilActive(uploaded.name);
   return { uri: ready.uri, expiresAt: ready.expiresAt };
-}
-
-/** Sends a file that already arrived on the server (for example from Blob) to Gemini. */
-export async function uploadBufferToGemini(options: {
-  filename: string;
-  mimeType: string;
-  data: Buffer;
-}): Promise<UploadedGeminiFile> {
-  const ai = getClient();
-  const uploaded = await ai.files.upload({
-    file: new Blob([new Uint8Array(options.data)], { type: options.mimeType }),
-    config: { mimeType: options.mimeType, displayName: options.filename.slice(0, 500) },
-  });
-  if (!uploaded.name) {
-    throw new AppError("ai_unavailable", "Gemini no pudo recibir el archivo. Vuelve a intentarlo.");
-  }
-  const ready = await waitUntilActive(uploaded.name);
-  return { fileUri: ready.uri, fileExpiresAt: ready.expiresAt, mimeType: ready.mimeType, size: ready.size || options.data.length };
 }
 
 /**
