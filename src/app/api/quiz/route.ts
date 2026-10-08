@@ -33,13 +33,15 @@ export async function POST(request: Request) {
 
     for (let round = 0; round < MAX_ROUNDS && accepted.length < count; round++) {
       const missing = count - accepted.length;
+      // A small surplus absorbs questions dropped by validation or the repetition filter.
+      const requested = round === 0 ? missing + Math.min(3, Math.ceil(missing * 0.2)) : missing;
       const existingTypes: QuestionType[] = [...existing, ...accepted].map((question) => question.type);
       const typeCounts = batchTypeCounts(
         config.types,
         config.level,
         config.count,
         existingTypes,
-        missing,
+        requested,
       );
       const avoid: PriorQuestion[] = [
         ...history,
@@ -53,7 +55,7 @@ export async function POST(request: Request) {
       ];
 
       const raw = await generateJson({
-        model: MODELS.main,
+        models: MODELS.main,
         system: QUIZ_SYSTEM,
         input: [
           ...input,
@@ -63,7 +65,7 @@ export async function POST(request: Request) {
               topics: knowledge.topics,
               materialLanguage: knowledge.language,
               config,
-              count: missing,
+              count: requested,
               typeCounts,
               conceptCounts,
               avoid,
@@ -91,6 +93,7 @@ export async function POST(request: Request) {
       accepted.push(...fresh.slice(0, missing));
       rejectedPrompts.push(...rejected.map((question) => question.prompt));
     }
+    const shortfall = count - accepted.length;
 
     if (accepted.length === 0) {
       throw new AppError(
@@ -101,7 +104,7 @@ export async function POST(request: Request) {
 
     return Response.json({
       questions: accepted,
-      exhausted: accepted.length < count,
+      exhausted: shortfall > 0 && rejectedPrompts.length >= shortfall,
       fileUpdates: updates,
     });
   } catch (error) {

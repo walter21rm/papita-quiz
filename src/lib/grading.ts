@@ -1,3 +1,4 @@
+import { wordStems } from "./dedupe";
 import { shuffledIndices } from "./shuffle";
 import { answersMatch } from "./text";
 import type { AnswerRecord, GradeResult, Question, UserResponse, Verdict } from "./types";
@@ -118,6 +119,34 @@ export function gradeLocally(question: Question, response: UserResponse): GradeR
     case "open_ended":
       return response.text.trim() ? null : { verdict: "incorrect", score: 0 };
   }
+}
+
+/**
+ * Approximate grading used only when the AI cannot be reached: written answers are compared with the
+ * expected answer and the rubric points by shared key words.
+ */
+export function gradeOffline(question: Question, response: UserResponse): GradeResult {
+  const local = gradeLocally(question, response);
+  if (local) return local;
+  if (response.type === "fill_blank") {
+    const blanks = question.blanks ?? [];
+    const blankResults = blanks.map((blank, index) =>
+      blank.accepted.some((accepted) => answersMatch(response.values[index] ?? "", accepted)),
+    );
+    const score = blanks.length ? blankResults.filter(Boolean).length / blanks.length : 0;
+    return { verdict: verdictFromScore(score), score, blankResults };
+  }
+  if (response.type === "open_ended") {
+    const answer = wordStems(response.text);
+    const points = question.rubric?.length ? question.rubric : [question.modelAnswer];
+    const covered = points.filter((point) => {
+      const stems = [...wordStems(point)];
+      return stems.length > 0 && stems.filter((stem) => answer.has(stem)).length / stems.length >= 0.5;
+    }).length;
+    const score = covered / points.length;
+    return { verdict: score >= 0.85 ? "correct" : score >= 0.4 ? "partial" : "incorrect", score: score >= 0.85 ? 1 : score };
+  }
+  return { verdict: "incorrect", score: 0 };
 }
 
 /** Each hint used and each extra attempt removes 25 % of the question's value (never below 25 %). */

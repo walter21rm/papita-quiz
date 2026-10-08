@@ -26,7 +26,7 @@ function normalize(text: string): string {
     .trim();
 }
 
-function wordStems(text: string): Set<string> {
+export function wordStems(text: string): Set<string> {
   return new Set(
     normalize(text)
       .split(" ")

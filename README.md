@@ -35,8 +35,13 @@ Sube tus apuntes, diapositivas, PDF o fotos y Papita te prepara quizzes por nive
 ## Configuración opcional (`.env.local`)
 
 - `GEMINI_MODEL`: modelo para analizar y crear preguntas (por defecto `gemini-3.8-flash`).
-- `GEMINI_FAST_MODEL`: modelo para corregir respuestas escritas (por defecto `gemini-3.5-flash-lite`).
+- `GEMINI_FALLBACK_MODELS`: modelos que se usan, en orden, cuando el principal agota su cuota o está saturado.
+- `GEMINI_FAST_MODEL` y `GEMINI_FAST_FALLBACK_MODELS`: modelos para corregir respuestas escritas.
 - `OFFICE_PDF_CONVERSION=off`: desactiva la conversión con Microsoft Office.
+
+## Cuota gratuita
+
+En el nivel gratuito cada modelo tiene su propio límite diario (por ejemplo, `gemini-3.8-flash` permite unas 20 consultas al día). Analizar un material usa 1 consulta y cada quiz 1 o 2. Cuando un modelo se queda sin cuota, la app pasa sola al siguiente de la lista; si se agotan todos, avisa cuánto falta para que se reinicie. Si la IA no responde al corregir una respuesta escrita, la app la califica comparándola con la respuesta esperada.
 
 ## Privacidad
 

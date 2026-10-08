@@ -19,7 +19,7 @@ export async function POST(request: Request) {
     }
 
     const raw = await generateJson({
-      model: MODELS.fast,
+      models: MODELS.fast,
       system: GRADE_SYSTEM,
       input: [{ type: "text", text: buildGradePrompt(question, describeAnswer(question, response), final) }],
       schema: gradeJsonSchema,

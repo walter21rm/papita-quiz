@@ -2,12 +2,13 @@ import { z } from "zod";
 import { LEVELS, QUESTION_TYPES } from "./types";
 
 // ---------- JSON Schemas sent to Gemini (subset supported by structured output) ----------
+// Nested minItems/maxItems make Gemini reject the schema as "invalid argument"; sizes are
+// requested in the prompt and enforced when normalizing the answer instead.
 
-const stringArray = (description: string, extra: Record<string, unknown> = {}) => ({
+const stringArray = (description: string) => ({
   type: "array",
   description,
   items: { type: "string" },
-  ...extra,
 });
 
 export const analysisJsonSchema = {
@@ -22,8 +23,7 @@ export const analysisJsonSchema = {
     summary: { type: "string", description: "Resumen del material en 3 a 6 oraciones, en español." },
     topics: {
       type: "array",
-      minItems: 1,
-      maxItems: 15,
+      description: "Entre 1 y 15 temas.",
       items: {
         type: "object",
         properties: {
@@ -32,14 +32,13 @@ export const analysisJsonSchema = {
           importance: { type: "integer", minimum: 1, maximum: 3, description: "3 = central, 1 = detalle menor." },
           concepts: {
             type: "array",
-            minItems: 1,
-            maxItems: 15,
+            description: "Entre 1 y 15 conceptos evaluables del tema.",
             items: {
               type: "object",
               properties: {
                 name: { type: "string" },
                 explanation: { type: "string", description: "Explicación breve y fiel al material." },
-                keyFacts: stringArray("Hechos verificables tal como aparecen en el material.", { maxItems: 8 }),
+                keyFacts: stringArray("De 1 a 8 hechos verificables tal como aparecen en el material."),
                 source: { type: "string", description: "Archivo y página, diapositiva u hoja donde aparece." },
               },
               required: ["name", "explanation", "keyFacts", "source"],
@@ -99,10 +98,7 @@ export const quizJsonSchema = {
           orderedItems: stringArray("Solo ordering: elementos en el orden correcto."),
           rubric: stringArray("Solo open_ended: puntos clave que debe mencionar una buena respuesta."),
           modelAnswer: { type: "string", description: "La respuesta correcta expresada en texto." },
-          hints: stringArray("Exactamente 3 pistas progresivas, de sutil a casi la respuesta.", {
-            minItems: 3,
-            maxItems: 3,
-          }),
+          hints: stringArray("Exactamente 3 pistas progresivas, de sutil a casi la respuesta."),
           explanation: { type: "string", description: "Por qué la respuesta es correcta (y por qué las otras no)." },
           source: { type: "string", description: "Archivo y página o diapositiva de donde sale la pregunta." },
           conceptIds: stringArray("IDs de los conceptos evaluados, tomados del mapa de conocimiento."),
@@ -250,7 +246,7 @@ export const quizRequestSchema = z.object({
   corpus: z.array(corpusPartSchema).min(1),
   knowledge: knowledgeSchema,
   config: quizConfigSchema,
-  count: z.number().int().min(1).max(15),
+  count: z.number().int().min(1).max(30),
   existing: z.array(priorQuestionSchema),
   history: z.array(priorQuestionSchema),
 });

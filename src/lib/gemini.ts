@@ -3,17 +3,39 @@ import { GoogleGenAI } from "@google/genai";
 import { AppError } from "./errors";
 import type { CorpusPart, FileUpdate, MediaPart } from "./types";
 
+function modelList(primary: string | undefined, fallbacks: string | undefined, defaults: string[]): string[] {
+  const configured = [primary, ...(fallbacks ?? defaults.join(",")).split(",")]
+    .map((model) => model?.trim())
+    .filter((model): model is string => Boolean(model));
+  return [...new Set(configured.length ? configured : defaults)];
+}
+
+// Each free-tier model has its own daily quota, so falling back to the next one keeps the app usable.
 export const MODELS = {
-  main: process.env.GEMINI_MODEL?.trim() || "gemini-3.8-flash",
-  fast: process.env.GEMINI_FAST_MODEL?.trim() || "gemini-3.5-flash-lite",
+  main: modelList(process.env.GEMINI_MODEL, process.env.GEMINI_FALLBACK_MODELS, [
+    "gemini-3.8-flash",
+    "gemini-3.7-flash",
+    "gemini-3.6-flash",
+    "gemini-3.5-flash",
+    "gemini-3.5-flash-lite",
+  ]),
+  fast: modelList(process.env.GEMINI_FAST_MODEL, process.env.GEMINI_FAST_FALLBACK_MODELS, [
+    "gemini-3.5-flash-lite",
+    "gemini-3.1-flash-lite",
+    "gemini-3.5-flash",
+  ]),
 };
 
 const INLINE_PART_LIMIT = 15 * 1024 * 1024;
 const INLINE_TOTAL_LIMIT = 20 * 1024 * 1024;
 const FILE_URI_SAFETY_MARGIN_MS = 30 * 60 * 1000;
 const FILE_DEFAULT_LIFETIME_MS = 47 * 60 * 60 * 1000;
+const SHORT_RATE_LIMIT_MS = 20_000;
+const OVERLOAD_COOLDOWN_MS = 60_000;
+const DEFAULT_QUOTA_COOLDOWN_MS = 60 * 60 * 1000;
+const REQUEST_OPTIONS = { maxRetries: 0, retries: { strategy: "none" as const } };
 
-type ThinkingLevel = "minimal" | "low" | "medium" | "high";
+type ThinkingLevel = "low" | "medium" | "high";
 
 export type InputContent =
   | { type: "text"; text: string }
@@ -21,6 +43,7 @@ export type InputContent =
   | { type: "document"; mime_type: string; data?: string; uri?: string };
 
 let client: GoogleGenAI | null = null;
+const unavailableUntil = new Map<string, number>();
 
 /** Throws a friendly error before doing any expensive work when the API key is missing. */
 export function assertApiKey(): string {
@@ -48,7 +71,45 @@ function errorStatus(error: unknown): number | undefined {
   return undefined;
 }
 
-function toAppError(error: unknown, model: string): AppError {
+function errorText(error: unknown): string {
+  if (typeof error !== "object" || error === null) return String(error);
+  const candidate = error as { message?: unknown; body?: unknown };
+  return `${String(candidate.message ?? "")} ${typeof candidate.body === "string" ? candidate.body : ""}`;
+}
+
+function retryDelayMs(error: unknown): number | undefined {
+  const text = errorText(error);
+  const human = /retry in\s+((?:\d+h)?\s*(?:\d+m)?\s*(?:[\d.]+s)?)/i.exec(text)?.[1];
+  if (human) {
+    const hours = Number(/(\d+)h/.exec(human)?.[1] ?? 0);
+    const minutes = Number(/(\d+)m/.exec(human)?.[1] ?? 0);
+    const seconds = Number(/([\d.]+)s/.exec(human)?.[1] ?? 0);
+    const total = ((hours * 60 + minutes) * 60 + seconds) * 1000;
+    if (total > 0) return total;
+  }
+  const field = /"retryDelay"\s*:\s*"([\d.]+)s"/.exec(text)?.[1];
+  return field ? Number(field) * 1000 : undefined;
+}
+
+type FailureKind = "quota" | "overloaded" | "missing_model" | "bad_output" | "fatal";
+
+function classify(error: unknown): FailureKind {
+  if (error instanceof AppError) return error.code === "ai_bad_response" ? "bad_output" : "fatal";
+  const status = errorStatus(error);
+  const text = errorText(error).toLowerCase();
+  if (status === 429 || text.includes("resource_exhausted")) return "quota";
+  if (status === 404 || (text.includes("model") && text.includes("not found"))) return "missing_model";
+  if (status === undefined || status >= 500) return "overloaded";
+  return "fatal";
+}
+
+function formatWait(ms: number): string {
+  const minutes = Math.ceil(ms / 60_000);
+  if (minutes < 60) return `${minutes} min`;
+  return `${Math.ceil(minutes / 60)} h`;
+}
+
+function toAppError(error: unknown): AppError {
   if (error instanceof AppError) return error;
   const status = errorStatus(error);
   const message = error instanceof Error ? error.message : String(error);
@@ -60,46 +121,11 @@ function toAppError(error: unknown, model: string): AppError {
   if (status === 403 || lower.includes("permission_denied")) {
     return new AppError("invalid_key", "Gemini rechazó la API key o no tiene permiso para usar este modelo.");
   }
-  if (status === 404 || (lower.includes("model") && lower.includes("not found"))) {
-    return new AppError(
-      "model_unavailable",
-      `El modelo "${model}" no está disponible para tu cuenta. Cambia GEMINI_MODEL o GEMINI_FAST_MODEL en .env.local.`,
-    );
-  }
-  if (status === 429 || lower.includes("resource_exhausted") || lower.includes("quota")) {
-    return new AppError(
-      "rate_limited",
-      "Gemini está ocupado o llegaste al límite gratuito por ahora. Espera un minuto y vuelve a intentarlo.",
-    );
-  }
-  if (status !== undefined && status >= 500) {
-    return new AppError("ai_unavailable", "Gemini tuvo un problema temporal. Vuelve a intentarlo en unos segundos.");
-  }
   if (status === 400 || status === 413) {
     return new AppError("bad_request", `Gemini no pudo procesar el material: ${message}`);
   }
   console.error("[papita-quiz] Error de Gemini:", error);
   return new AppError("ai_unavailable", "No pude comunicarme con Gemini. Revisa tu conexión a internet.");
-}
-
-function isRetryable(error: unknown): boolean {
-  const status = errorStatus(error);
-  if (status === undefined) return !(error instanceof AppError);
-  return status === 429 || status >= 500;
-}
-
-async function withRetry<T>(task: () => Promise<T>, attempts = 3): Promise<T> {
-  let lastError: unknown;
-  for (let attempt = 0; attempt < attempts; attempt++) {
-    try {
-      return await task();
-    } catch (error) {
-      lastError = error;
-      if (attempt === attempts - 1 || !isRetryable(error)) break;
-      await new Promise((resolve) => setTimeout(resolve, 2000 * 3 ** attempt));
-    }
-  }
-  throw lastError;
 }
 
 function parseJson(text: string): unknown {
@@ -117,23 +143,25 @@ function parseJson(text: string): unknown {
   }
 }
 
-export async function generateJson(options: {
-  model: string;
+interface GenerateOptions {
+  models: string[];
   system: string;
   input: InputContent[];
   schema: Record<string, unknown>;
   thinking: ThinkingLevel;
-}): Promise<unknown> {
-  const ai = getClient();
+}
+
+async function callModel(model: string, options: GenerateOptions, withThinking = true, retried = false): Promise<unknown> {
   try {
-    const interaction = await withRetry(() =>
-      ai.interactions.create({
-        model: options.model,
+    const interaction = await getClient().interactions.create(
+      {
+        model,
         system_instruction: options.system,
         input: options.input,
         response_format: { type: "text", mime_type: "application/json", schema: options.schema },
-        generation_config: { thinking_level: options.thinking },
-      }),
+        ...(withThinking ? { generation_config: { thinking_level: options.thinking } } : {}),
+      },
+      REQUEST_OPTIONS,
     );
     if (interaction.status && interaction.status !== "completed") {
       throw new AppError(
@@ -145,16 +173,69 @@ export async function generateJson(options: {
     }
     return parseJson(interaction.output_text ?? "");
   } catch (error) {
-    throw toAppError(error, options.model);
+    if (withThinking && errorStatus(error) === 400 && /thinking/i.test(errorText(error))) {
+      return callModel(model, options, false, retried);
+    }
+    const delay = retryDelayMs(error);
+    if (!retried && classify(error) === "quota" && delay !== undefined && delay <= SHORT_RATE_LIMIT_MS) {
+      await new Promise((resolve) => setTimeout(resolve, delay + 500));
+      return callModel(model, options, withThinking, true);
+    }
+    throw error;
   }
+}
+
+/** Calls the first available model of the chain and returns the parsed JSON answer. */
+export async function generateJson(options: GenerateOptions): Promise<unknown> {
+  assertApiKey();
+  const now = Date.now();
+  const available = options.models.filter((model) => (unavailableUntil.get(model) ?? 0) <= now);
+  if (available.length === 0) {
+    const soonest = Math.min(...options.models.map((model) => unavailableUntil.get(model) ?? now));
+    throw new AppError(
+      "rate_limited",
+      `Se acabó por ahora tu cuota gratuita de Gemini. Vuelve a intentarlo en unos ${formatWait(soonest - now)}; mientras tanto puedes repasar tus quizzes ya creados.`,
+    );
+  }
+
+  let lastQuotaWait: number | undefined;
+  let lastError: unknown;
+  for (const model of available) {
+    try {
+      return await callModel(model, options);
+    } catch (error) {
+      lastError = error;
+      const kind = classify(error);
+      if (kind === "fatal") throw toAppError(error);
+      if (kind === "quota") {
+        lastQuotaWait = retryDelayMs(error) ?? DEFAULT_QUOTA_COOLDOWN_MS;
+        unavailableUntil.set(model, Date.now() + lastQuotaWait);
+      } else if (kind === "overloaded") {
+        unavailableUntil.set(model, Date.now() + OVERLOAD_COOLDOWN_MS);
+      } else if (kind === "missing_model") {
+        unavailableUntil.set(model, Date.now() + 24 * 60 * 60 * 1000);
+      }
+      console.warn(`[papita-quiz] ${model} no respondió (${kind}); probando con el siguiente modelo.`);
+    }
+  }
+
+  if (lastQuotaWait !== undefined) {
+    throw new AppError(
+      "rate_limited",
+      `Llegaste al límite gratuito de Gemini por ahora. Vuelve a intentarlo en unos ${formatWait(lastQuotaWait)}; mientras tanto puedes repasar tus quizzes ya creados.`,
+    );
+  }
+  if (lastError instanceof AppError) throw lastError;
+  throw new AppError("ai_unavailable", "Gemini está muy ocupado en este momento. Vuelve a intentarlo en un minuto.");
 }
 
 async function uploadMedia(part: MediaPart): Promise<{ uri: string; expiresAt: number }> {
   const ai = getClient();
   const blob = new Blob([Buffer.from(part.data, "base64")], { type: part.mimeType });
-  let file = await withRetry(() =>
-    ai.files.upload({ file: blob, config: { mimeType: part.mimeType, displayName: part.label.slice(0, 500) } }),
-  );
+  let file = await ai.files.upload({
+    file: blob,
+    config: { mimeType: part.mimeType, displayName: part.label.slice(0, 500) },
+  });
   const deadline = Date.now() + 120_000;
   while (file.state === "PROCESSING" && file.name && Date.now() < deadline) {
     await new Promise((resolve) => setTimeout(resolve, 2000));
@@ -211,7 +292,7 @@ export async function corpusToInput(parts: CorpusPart[]): Promise<{ input: Input
       if (!uri) inlineBytes += part.size;
     }
   } catch (error) {
-    throw toAppError(error, "Files API");
+    throw toAppError(error);
   }
 
   return { input, updates };

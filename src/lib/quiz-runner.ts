@@ -7,17 +7,25 @@ import {
   getPriorQuestions,
   questionToPrior,
   setQuizError,
+  stopQuizGeneration,
 } from "./repo";
 
+// Free-tier quotas are counted per request: short quizzes come in one call, long ones in two
+// (a quick first batch so the student can start, then the rest).
+const SINGLE_CALL_MAX = 10;
 const FIRST_BATCH = 5;
-const NEXT_BATCH = 10;
+const MAX_CALLS_PER_RUN = 4;
 
 // Generation lives outside React so it keeps going while the quiz page is hidden or remounted;
 // pages observe progress through IndexedDB.
 const running = new Map<string, Promise<void>>();
 
 async function generate(quizId: string): Promise<void> {
-  for (;;) {
+  for (let call = 0; ; call++) {
+    if (call >= MAX_CALLS_PER_RUN) {
+      await stopQuizGeneration(quizId);
+      return;
+    }
     const quiz = await db.quizzes.get(quizId);
     if (!quiz || quiz.status !== "generating") return;
     const material = await db.materials.get(quiz.materialId);
@@ -32,7 +40,8 @@ async function generate(quizId: string): Promise<void> {
       await db.quizzes.update(quizId, { status: "ready" });
       return;
     }
-    const count = Math.min(quiz.questions.length === 0 ? FIRST_BATCH : NEXT_BATCH, remaining);
+    const firstCall = quiz.questions.length === 0;
+    const count = firstCall && remaining > SINGLE_CALL_MAX ? FIRST_BATCH : remaining;
 
     try {
       const history = await getPriorQuestions(material.id, quiz.id);

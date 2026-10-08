@@ -53,7 +53,7 @@ export async function POST(request: Request) {
     }
 
     const raw = await generateJson({
-      model: MODELS.main,
+      models: MODELS.main,
       system: ANALYSIS_SYSTEM,
       input: [...input, { type: "text", text: buildAnalysisPrompt(parts.length) }],
       schema: analysisJsonSchema,

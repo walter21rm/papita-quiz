@@ -9,6 +9,7 @@ import {
   applyPenalty,
   emptyResponse,
   gradeLocally,
+  gradeOffline,
   isAnswered,
   MAX_CHECKS,
   MAX_HINTS,
@@ -84,7 +85,18 @@ export function QuestionStage({ quiz, attempt, question, isLast, onNext }: Quest
     try {
       const nextChecks = checks + 1;
       const final = nextChecks >= MAX_CHECKS;
-      const result = gradeLocally(question, response) ?? (await requestGrade({ question, response, final }));
+      let result = gradeLocally(question, response);
+      if (!result) {
+        try {
+          result = await requestGrade({ question, response, final });
+        } catch (caught) {
+          if (!(caught instanceof ClientApiError)) throw caught;
+          result = {
+            ...gradeOffline(question, response),
+            feedback: `No pude corregir con la IA (${caught.message}) Te califiqué comparando con la respuesta esperada.`,
+          };
+        }
+      }
       const score = applyPenalty(result.score, hintsUsed, nextChecks);
       const previousBest = saved?.score ?? 0;
       const improved = score >= previousBest;
