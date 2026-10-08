@@ -54,36 +54,39 @@ export interface AnalyzeResponse {
   notes: string[];
 }
 
-async function uploadFileInChunks(file: File) {
+async function uploadFileDirect(file: File) {
   const mimeType = mimeForFile(file.name, file.type);
-  const started = await call<{ handle: string; mimeType: string }>("/api/files/begin", {
+  const started = await call<{ uploadUrl: string; mimeType: string }>("/api/files/begin", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ filename: file.name, mimeType, size: file.size }),
   });
-  const chunkSize = LIMITS.uploadChunkBytes;
-  for (let offset = 0; offset < file.size; offset += chunkSize) {
-    const end = Math.min(offset + chunkSize, file.size);
-    const form = new FormData();
-    form.append("handle", started.handle);
-    form.append("offset", String(offset));
-    form.append("last", end >= file.size ? "1" : "0");
-    form.append("chunk", file.slice(offset, end), file.name);
-    const result = await call<{ ok?: boolean; file?: { fileUri: string; fileExpiresAt: number; mimeType: string; size: number } }>(
-      "/api/files/chunk",
-      { method: "POST", body: form },
-    );
-    if (result.file) {
-      return {
-        name: file.name,
-        mimeType: result.file.mimeType || started.mimeType,
-        size: file.size,
-        fileUri: result.file.fileUri,
-        fileExpiresAt: result.file.fileExpiresAt,
-      };
+  let finished: { file?: { name?: string } } | null = null;
+  for (let offset = 0; offset < file.size; offset += LIMITS.geminiChunkBytes) {
+    const end = Math.min(offset + LIMITS.geminiChunkBytes, file.size);
+    const last = end >= file.size;
+    let response: Response;
+    try {
+      response = await fetch(started.uploadUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": mimeType,
+          "X-Goog-Upload-Command": last ? "upload, finalize" : "upload",
+          "X-Goog-Upload-Offset": String(offset),
+        },
+        body: file.slice(offset, end),
+      });
+    } catch {
+      throw new ClientApiError("No pude enviar el archivo a Gemini. Revisa tu conexión e inténtalo otra vez.", "network");
     }
+    if (!response.ok) {
+      throw new ClientApiError("Gemini no aceptó el archivo. Vuelve a intentarlo en un momento.", "ai_unavailable");
+    }
+    if (last) finished = (await response.json().catch(() => null)) as { file?: { name?: string } } | null;
   }
-  throw new ClientApiError("La subida del archivo no terminó. Vuelve a intentarlo.", "ai_unavailable");
+  const geminiName = finished?.file?.name;
+  if (!geminiName) throw new ClientApiError("La subida del archivo no terminó. Vuelve a intentarlo.", "ai_unavailable");
+  return { name: file.name, mimeType: started.mimeType, size: file.size, geminiName };
 }
 
 export async function analyzeFiles(files: File[]): Promise<AnalyzeResponse> {
@@ -94,7 +97,7 @@ export async function analyzeFiles(files: File[]): Promise<AnalyzeResponse> {
     return call<AnalyzeResponse>("/api/analyze", { method: "POST", body: form });
   }
   const remotes = [];
-  for (const file of files) remotes.push(await uploadFileInChunks(file));
+  for (const file of files) remotes.push(await uploadFileDirect(file));
   return call<AnalyzeResponse>("/api/analyze", {
     method: "POST",
     headers: { "Content-Type": "application/json" },

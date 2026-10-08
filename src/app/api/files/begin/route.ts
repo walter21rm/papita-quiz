@@ -1,13 +1,11 @@
 import { AppError, errorResponse } from "@/lib/errors";
-import { assertApiKey, beginResumableUpload } from "@/lib/gemini";
+import { beginResumableUpload } from "@/lib/gemini";
 import { LIMITS, mimeForFile } from "@/lib/labels";
-import { encodeUploadHandle } from "@/lib/upload-session";
 
 export const maxDuration = 30;
 
 export async function POST(request: Request) {
   try {
-    assertApiKey();
     const body = (await request.json().catch(() => null)) as {
       filename?: unknown;
       mimeType?: unknown;
@@ -24,7 +22,7 @@ export async function POST(request: Request) {
     const mimeType =
       typeof body?.mimeType === "string" && body.mimeType ? body.mimeType : mimeForFile(filename);
     const uploadUrl = await beginResumableUpload({ filename, mimeType, size });
-    return Response.json({ handle: encodeUploadHandle(uploadUrl), mimeType });
+    return Response.json({ uploadUrl, mimeType });
   } catch (error) {
     return errorResponse(error);
   }

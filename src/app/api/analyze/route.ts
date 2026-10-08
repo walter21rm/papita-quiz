@@ -2,7 +2,7 @@ import { z } from "zod";
 import { normalizeAnalysis } from "@/lib/analysis";
 import { processFiles } from "@/lib/documents";
 import { AppError, errorResponse } from "@/lib/errors";
-import { assertApiKey, corpusToInput, generateJson, MODELS } from "@/lib/gemini";
+import { assertApiKey, corpusToInput, generateJson, MODELS, resolveGeminiFile } from "@/lib/gemini";
 import { formatBytes, LIMITS, mimeForFile } from "@/lib/labels";
 import { ANALYSIS_SYSTEM, buildAnalysisPrompt } from "@/lib/prompts";
 import { analysisJsonSchema } from "@/lib/schemas";
@@ -14,8 +14,7 @@ const remoteFileSchema = z.object({
   name: z.string().min(1),
   mimeType: z.string().min(1),
   size: z.number().positive(),
-  fileUri: z.string().min(1),
-  fileExpiresAt: z.number().int(),
+  geminiName: z.string().regex(/^files\/[A-Za-z0-9_-]+$/),
 });
 
 function fallbackTitle(names: string[]): string {
@@ -60,16 +59,20 @@ export async function POST(request: Request) {
       const body = await request.json().catch(() => null);
       const parsed = z.object({ remotes: z.array(remoteFileSchema).min(1).max(LIMITS.maxFiles) }).safeParse(body);
       if (!parsed.success) throw new AppError("bad_request", "La solicitud para analizar no es válida.");
-      const parts: CorpusPart[] = parsed.data.remotes.map((file) => ({
-        kind: "media",
-        label: `"${file.name}"`,
-        mediaType: file.mimeType.startsWith("image/") ? "image" : "document",
-        mimeType: mimeForFile(file.name, file.mimeType),
-        size: file.size,
-        data: "",
-        fileUri: file.fileUri,
-        fileExpiresAt: file.fileExpiresAt,
-      }));
+      const parts: CorpusPart[] = [];
+      for (const file of parsed.data.remotes) {
+        const ready = await resolveGeminiFile(file.geminiName);
+        parts.push({
+          kind: "media",
+          label: `"${file.name}"`,
+          mediaType: (ready.mimeType || file.mimeType).startsWith("image/") ? "image" : "document",
+          mimeType: mimeForFile(file.name, ready.mimeType || file.mimeType),
+          size: file.size,
+          data: "",
+          fileUri: ready.fileUri,
+          fileExpiresAt: ready.fileExpiresAt,
+        });
+      }
       return Response.json(await analyzeParts(parts, [], parsed.data.remotes.map((file) => file.name)));
     }
 

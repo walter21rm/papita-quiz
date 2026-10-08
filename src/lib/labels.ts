@@ -55,7 +55,8 @@ export const LIMITS = {
   maxTotalBytes: 150 * 1024 * 1024,
   // Vercel Hobby rejects bodies over ~4.5 MB (HTTP 413); stay under that per request.
   gatewayBytes: 3.5 * 1024 * 1024,
-  uploadChunkBytes: 2 * 1024 * 1024,
+  // Gemini rejects any non-final resumable chunk that is not a multiple of 8 MB.
+  geminiChunkBytes: 8 * 1024 * 1024,
   minQuestions: 5,
   maxQuestions: 30,
 } as const;

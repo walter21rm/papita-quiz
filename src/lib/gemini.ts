@@ -303,44 +303,21 @@ export async function beginResumableUpload(options: {
     const detail = await response.text().catch(() => "");
     throw toAppError(new Error(detail || `No pude iniciar la subida (${response.status}).`));
   }
-  return uploadUrl;
+  const publicUrl = new URL(uploadUrl);
+  publicUrl.searchParams.delete("key");
+  const safe = publicUrl.toString();
+  if (safe.includes(apiKey)) {
+    throw new AppError("internal", "No pude preparar una subida segura para ese archivo.");
+  }
+  return safe;
 }
 
-export async function pushResumableChunk(options: {
-  uploadUrl: string;
-  chunk: Buffer;
-  offset: number;
-  last: boolean;
-}): Promise<UploadedGeminiFile | null> {
-  const response = await fetch(options.uploadUrl, {
-    method: "POST",
-    headers: {
-      "X-Goog-Upload-Command": options.last ? "upload, finalize" : "upload",
-      "X-Goog-Upload-Offset": String(options.offset),
-      "Content-Type": "application/octet-stream",
-    },
-    body: new Uint8Array(options.chunk),
-  });
-  if (!response.ok) {
-    const detail = await response.text().catch(() => "");
-    throw toAppError(new Error(detail || `Falló un tramo de la subida (${response.status}).`));
+export async function resolveGeminiFile(name: string): Promise<UploadedGeminiFile> {
+  if (!/^files\/[A-Za-z0-9_-]+$/.test(name)) {
+    throw new AppError("bad_request", "La subida del archivo no es válida. Vuelve a intentarlo.");
   }
-  if (!options.last) return null;
-  const body = (await response.json().catch(() => null)) as { file?: { name?: string; uri?: string; mimeType?: string; sizeBytes?: string; expirationTime?: string } } | null;
-  const name = body?.file?.name;
-  if (name) {
-    const ready = await waitUntilActive(name);
-    return { fileUri: ready.uri, fileExpiresAt: ready.expiresAt, mimeType: ready.mimeType, size: ready.size };
-  }
-  if (body?.file?.uri) {
-    return {
-      fileUri: body.file.uri,
-      fileExpiresAt: fileExpiresAt(body.file.expirationTime),
-      mimeType: body.file.mimeType ?? "application/octet-stream",
-      size: Number(body.file.sizeBytes ?? options.offset + options.chunk.length),
-    };
-  }
-  throw new AppError("ai_unavailable", "Gemini no confirmó la subida del archivo. Vuelve a intentarlo.");
+  const ready = await waitUntilActive(name);
+  return { fileUri: ready.uri, fileExpiresAt: ready.expiresAt, mimeType: ready.mimeType, size: ready.size };
 }
 
 /**
