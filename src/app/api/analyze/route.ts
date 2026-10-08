@@ -60,7 +60,7 @@ async function analyzeCorpus(parts: CorpusPart[], notes: string[], names: string
     system: ANALYSIS_SYSTEM,
     input: [...input, { type: "text", text: buildAnalysisPrompt(parts.length) }],
     schema: analysisJsonSchema,
-    thinking: "high",
+    thinking: "medium",
   });
   return {
     analysis: normalizeAnalysis(raw, fallbackTitle(names)),

@@ -33,7 +33,9 @@ const FILE_DEFAULT_LIFETIME_MS = 47 * 60 * 60 * 1000;
 const SHORT_RATE_LIMIT_MS = 20_000;
 const OVERLOAD_COOLDOWN_MS = 60_000;
 const DEFAULT_QUOTA_COOLDOWN_MS = 60 * 60 * 1000;
-const REQUEST_OPTIONS = { maxRetries: 0, retries: { strategy: "none" as const } };
+const MODEL_TIMEOUT_MS = 60_000;
+const MAX_MODEL_ATTEMPTS = 4;
+const REQUEST_OPTIONS = { maxRetries: 0, retries: { strategy: "none" as const }, timeout_ms: MODEL_TIMEOUT_MS };
 
 type ThinkingLevel = "low" | "medium" | "high";
 
@@ -98,6 +100,7 @@ function classify(error: unknown): FailureKind {
   const status = errorStatus(error);
   const text = errorText(error).toLowerCase();
   if (status === 429 || text.includes("resource_exhausted")) return "quota";
+  if (text.includes("timeout") || text.includes("timed out") || text.includes("aborted")) return "overloaded";
   if (status === 404 || (text.includes("model") && text.includes("not found"))) return "missing_model";
   if (status === undefined || status >= 500) return "overloaded";
   return "fatal";
@@ -200,7 +203,9 @@ export async function generateJson(options: GenerateOptions): Promise<unknown> {
 
   let lastQuotaWait: number | undefined;
   let lastError: unknown;
-  for (const model of available) {
+  const started = Date.now();
+  for (const [index, model] of available.entries()) {
+    if (index >= MAX_MODEL_ATTEMPTS || Date.now() - started > MODEL_TIMEOUT_MS * (MAX_MODEL_ATTEMPTS - 1)) break;
     try {
       return await callModel(model, options);
     } catch (error) {

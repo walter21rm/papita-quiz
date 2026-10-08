@@ -33,6 +33,12 @@ async function call<T>(url: string, init: RequestInit): Promise<T> {
   }
   const body = await response.json().catch(() => null);
   if (!response.ok) {
+    if (response.status === 504) {
+      throw new ClientApiError(
+        "El análisis tardó demasiado porque Gemini está saturado. Vuelve a intentarlo en un minuto.",
+        "ai_unavailable",
+      );
+    }
     if (response.status === 413) {
       throw new ClientApiError(
         "El archivo es demasiado grande para una sola subida. Papita lo enviará por partes; si ves este aviso, recarga e inténtalo de nuevo.",
